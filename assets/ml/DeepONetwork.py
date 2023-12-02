@@ -6,33 +6,37 @@ import tensorflow as tf
 
 class BiasLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
-        self.bias = self.add_weight(shape = input_shape, initializer = tf.keras.initializers.Zeros, trainable = True)
+        self.bias = self.add_weight(initializer = tf.keras.initializers.Zeros, trainable = True)
 
     @tf.function
     def call(self, X):
         return X + self.bias
 
 class TrunkNN(tf.keras.Model):
-    def __init__(self, hiddenLayers, **kwargs):
+    def __init__(self, hiddenLayers, input_shape = (1, ), **kwargs):
         super().__init__(**kwargs)
         self.hiddenLayers = hiddenLayers
-        self.out = tf.keras.layers.Dense(1)
+        self.inp = tf.keras.layers.InputLayer(input_shape = input_shape)
+        self.out = tf.keras.layers.Dense(20, activation = 'tanh', name = "trunkNET_Output")
 
     @tf.function
     def call(self, X):
+        X = self.inp(X)
         for layer in self.hiddenLayers:
             X = layer(X)
         
         return self.out(X)
 
 class BranchNN(tf.keras.Model):
-    def __init__(self, hiddenLayers, **kwargs):
+    def __init__(self, hiddenLayers, input_shape = (1, ), **kwargs):
         super().__init__(**kwargs)
         self.hiddenLayers = hiddenLayers
-        self.out = tf.keras.layers.Dense(1)
+        self.inp = tf.keras.layers.InputLayer(input_shape = input_shape)
+        self.out = tf.keras.layers.Dense(20, activation = 'tanh', name = "branchNet_Output")
 
     @tf.function
     def call(self, X):
+        X = self.inp(X)
         for layer in self.hiddenLayers:
             X = layer(X)
         
@@ -43,6 +47,7 @@ class DeepOPINN(tf.keras.Model):
         super().__init__(**kwargs)
         self.branchNN = branchNN
         self.trunkNN = trunkNN
+        self.biasLayer = BiasLayer()
 
     @tf.function
     def call(self, X):
@@ -51,7 +56,7 @@ class DeepOPINN(tf.keras.Model):
         branch = self.branchNN(branch_input)
         trunk = self.trunkNN(trunk_input)
         dot = tf.reduce_sum(tf.multiply(branch, trunk, axis = 1, keepdims = True))
-        out = BiasLayer()(dot)
+        out = self.biasLayer(dot)
         return out
 
     # The below makes this a physics informed PINN
@@ -68,13 +73,20 @@ class DeepONET(tf.keras.Model):
         super().__init__(**kwargs)
         self.branchNN = branchNN
         self.trunkNN = trunkNN
+        self.biasLayer = BiasLayer()
 
     @tf.function
     def call(self, X):
-        branch_input = X["branch_input"]
-        trunk_input = X["trunk_input"]
+        branch_input = X[0]
+        print(f"Branch Input Shape: {branch_input.shape}")
+        trunk_input = X[1]
+        print(f"Trunk Input Shape: {trunk_input.shape}")
         branch = self.branchNN(branch_input)
+        print(f"Branch Output Shape: {branch.shape}")
         trunk = self.trunkNN(trunk_input)
-        dot = tf.reduce_sum(tf.multiply(branch, trunk, axis = 1, keepdims = True))
-        out = BiasLayer()(dot)
+        print(f"Trunk Output Shape: {trunk.shape}")
+        dot = tf.reduce_sum(tf.multiply(branch, trunk), axis = 1, keepdims = True)
+        print(f"Dot Product Output Shape: {dot.shape}")
+        out = self.biasLayer(dot)
+        print(f"Output Shape: {out.shape}")
         return out
