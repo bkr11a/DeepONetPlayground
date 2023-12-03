@@ -17,7 +17,7 @@ class TrunkNN(tf.keras.Model):
         super().__init__(**kwargs)
         self.hiddenLayers = hiddenLayers
         self.inp = tf.keras.layers.InputLayer(input_shape = input_shape)
-        self.out = tf.keras.layers.Dense(20, activation = 'tanh', name = "trunkNET_Output")
+        self.out = tf.keras.layers.Dense(20, activation = 'linear', name = "trunkNET_Output")
 
     @tf.function
     def call(self, X):
@@ -32,7 +32,7 @@ class BranchNN(tf.keras.Model):
         super().__init__(**kwargs)
         self.hiddenLayers = hiddenLayers
         self.inp = tf.keras.layers.InputLayer(input_shape = input_shape)
-        self.out = tf.keras.layers.Dense(20, activation = 'tanh', name = "branchNet_Output")
+        self.out = tf.keras.layers.Dense(20, activation = 'linear', name = "branchNet_Output")
 
     @tf.function
     def call(self, X):
