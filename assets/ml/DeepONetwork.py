@@ -61,8 +61,8 @@ class DeepOPINN(tf.keras.Model):
 
     # The below makes this a physics informed PINN
     @tf.function
-    def f_theta_residual(self):
-        pass
+    def f_theta_residual(self, f_t, g):
+        return f_t - g
 
     @tf.function
     def train_step(self):
