@@ -65,6 +65,28 @@ class DeepOPINN(tf.keras.Model):
         return f_t - g
 
     @tf.function
+    def get_f_residual(self):
+        # TODO - test if the persistent flag can be removed for performance
+        with tf.GradientTape(persistent = True) as tape:
+            tape.watch(...)
+
+            # Compute the gradient
+            f_t = tape.gradient(...)
+
+        # delete the tape
+        del tape
+
+        return self.f_theta_residual(f_t, g)
+
+    @tf.function
+    def boundary_residual(self, boundary, est_boundary):
+        return boundary - est_boundary
+
+    @tf.function
+    def loss_function(self):
+        pass
+
+    @tf.function
     def train_step(self):
         pass
 
