@@ -72,7 +72,9 @@ class DeepOPINN(tf.keras.Model):
         return f_t - g
 
     @tf.function
-    def get_f_residual(self, domain, profile):
+    def get_f_residual(self, X):
+        domain = X[1]
+        g = X[0]
         # TODO - test if the persistent flag can be removed for performance
         with tf.GradientTape(persistent = True) as tape:
             # watch how things evole according to the domain
@@ -82,15 +84,13 @@ class DeepOPINN(tf.keras.Model):
             # f = self.nn([profile, domain])
             # Perhaps we need to explicitly call the call function?
             # f = self.call([profile, domain])
-            f = self([profile, domain])
+            f = self(X)
 
             # Compute the gradient
             f_t = tape.gradient(f, domain)
 
         # delete the tape
         del tape
-
-        g = profile
 
         return self.f_theta_residual(f_t, g)
 
@@ -107,7 +107,7 @@ class DeepOPINN(tf.keras.Model):
 
         # TODO: Log all three types of losses to see what has the biggest impact and for further study.
         # Physics informed loss
-        physicsLoss = self.get_f_residual(domain=domain, profile=profile)
+        physicsLoss = self.get_f_residual(X=X)
         physicsLoss = tf.reduce_mean(tf.square(physicsLoss))
 
         # Model compiled loss
@@ -118,12 +118,37 @@ class DeepOPINN(tf.keras.Model):
         boundaryLoss = self.boundary_residual(boundary=y[0], est_boundary=y_pred[0])
         boundaryLoss = tf.reduce_mean(tf.square(boundaryLoss))
 
+        # Could I make this a weighted combination with some tunable variables?
+        loss = traditionalLoss + physicsLoss + boundaryLoss
+
+        # TODO: Need to make some callbacks to log the different types of losses
+
         # Return this tuple, should I package this in a neater way?
-        return traditionalLoss, physicsLoss, boundaryLoss
+        return loss, traditionalLoss, physicsLoss, boundaryLoss
 
     @tf.function
-    def train_step(self):
-        pass
+    def get_gradient(self):
+        # Calculate the gradient for the model itself.
+        with tf.GradientTape() as tape:
+            tape.watch(self.trainable_variables)
+            loss, traditionalLoss, physicsLoss, boundaryLoss = self.loss_function()
+            grad = tape.gradient(loss, self.trainable_variables)
+
+        del tape
+        return loss, grad
+
+    @tf.function
+    def train_step(self, X):
+        loss, grad_theta = self.get_gradient()
+        self.optimizer.apply_gradients(zip(grad_theta, self.trainable_variables))
+        
+        for metric in self.metrics:
+            if metric.name == "loss":
+                metric.update_state(loss)
+            else:
+                metric.update_state(y, y_pred)
+        
+        return {m.name() : m.result() for m in self.metrics}
 
 class DeepONET(tf.keras.Model):
     def __init__(self, branchNN, trunkNN, **kwargs):
