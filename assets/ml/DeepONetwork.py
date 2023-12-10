@@ -49,6 +49,8 @@ class DeepOPINN(tf.keras.Model):
         self.trunkNN = trunkNN
         self.biasLayer = BiasLayer()
         self.domain = domain
+        self.modelFits = {"Physics_Loss" : [], "Boundary_Loss" : [], "Traditional_Loss" : [], "Combined_Loss" : []}
+        self.last_y_pred = None
 
     @tf.function
     def call(self, X):
@@ -92,14 +94,16 @@ class DeepOPINN(tf.keras.Model):
         # delete the tape
         del tape
 
-        return self.f_theta_residual(f_t, g)
+        self.last_y_pred = f
+
+        return self.f_theta_residual(f_t=f_t, g=g)
 
     @tf.function
     def boundary_residual(self, boundary, est_boundary):
         return boundary - est_boundary
 
     @tf.function
-    def loss_function(self):
+    def loss_function(self, X, y):
         # Have to combine three things to form a unified loss function
         # 1. Traditional loss function that is explained by the supervised data. i.e. Mean Squared Error
         # 2. Physics Informed Loss, get the loss from the PDE
@@ -111,42 +115,53 @@ class DeepOPINN(tf.keras.Model):
         physicsLoss = tf.reduce_mean(tf.square(physicsLoss))
 
         # Model compiled loss
-        traditionalLoss = self.compute_loss(y=y, y_pred=y_pred)
+        traditionalLoss = self.compute_loss(y=y, y_pred=self.last_y_pred)
 
         # Boundary loss - IVP so grab the first value
         # NOTE: Double check to see if this is the correct slicing / way to do this
-        boundaryLoss = self.boundary_residual(boundary=y[0], est_boundary=y_pred[0])
+        boundaryLoss = self.boundary_residual(boundary=y[0], est_boundary=self.last_y_pred[0])
         boundaryLoss = tf.reduce_mean(tf.square(boundaryLoss))
 
         # Could I make this a weighted combination with some tunable variables?
         loss = traditionalLoss + physicsLoss + boundaryLoss
 
-        # TODO: Need to make some callbacks to log the different types of losses
+        # Write these out to the tensorboard callback
+        tf.summary.scaler('Physics Based Loss', data=physicsLoss, step=self.epoch)
+        tf.summary.scaler('Boundary Loss', data=boundaryLoss, step=self.epoch)
+        tf.summary.scaler('Conventional Loss', data=traditionalLoss, step=self.epoch)
+        tf.summary.scaler('Combined Loss', data=loss, step=self.epoch)
 
-        # Return this tuple, should I package this in a neater way?
-        return loss, traditionalLoss, physicsLoss, boundaryLoss
+        # Write the fitting history to a dictionary
+        self.modelFits["Physics_Loss"].append(physicsLoss.numpy())
+        self.modelFits["Boundary_Loss"].append(boundaryLoss.numpy())
+        self.modelFits["Traditional_Loss"].append(traditionalLoss.numpy())
+        self.modelFits["Combined_Loss"].append(loss.numpy())
+
+        return loss 
 
     @tf.function
-    def get_gradient(self):
+    def get_gradient(self, X, y):
         # Calculate the gradient for the model itself.
         with tf.GradientTape() as tape:
             tape.watch(self.trainable_variables)
-            loss, traditionalLoss, physicsLoss, boundaryLoss = self.loss_function()
+            loss = self.loss_function(X=X, y=y)
             grad = tape.gradient(loss, self.trainable_variables)
 
         del tape
         return loss, grad
 
     @tf.function
-    def train_step(self, X):
-        loss, grad_theta = self.get_gradient()
+    def train_step(self, data):
+        # Unpack the data
+        X, y = data
+        loss, grad_theta = self.get_gradient(X=X, y=y)
         self.optimizer.apply_gradients(zip(grad_theta, self.trainable_variables))
         
         for metric in self.metrics:
             if metric.name == "loss":
                 metric.update_state(loss)
             else:
-                metric.update_state(y, y_pred)
+                metric.update_state(y, self.last_y_pred)
         
         return {m.name() : m.result() for m in self.metrics}
 
