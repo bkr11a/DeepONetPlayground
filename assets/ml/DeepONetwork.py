@@ -43,14 +43,13 @@ class BranchNN(tf.keras.Model):
         return self.out(X)
 
 class DeepOPINN(tf.keras.Model):
-    def __init__(self, branchNN, trunkNN, domain, **kwargs):
+    def __init__(self, branchNN, trunkNN, **kwargs):
         super().__init__(**kwargs)
         self.branchNN = branchNN
         self.trunkNN = trunkNN
         self.biasLayer = BiasLayer()
-        self.domain = domain
         self.modelFits = {"Physics_Loss" : [], "Boundary_Loss" : [], "Traditional_Loss" : [], "Combined_Loss" : []}
-        self.last_y_pred = None
+        # self.last_y_pred = None
 
     @tf.function
     def call(self, X):
@@ -94,9 +93,9 @@ class DeepOPINN(tf.keras.Model):
         # delete the tape
         del tape
 
-        self.last_y_pred = f
+        y_pred = f
 
-        return self.f_theta_residual(f_t=f_t, g=g)
+        return self.f_theta_residual(f_t=f_t, g=g), y_pred
 
     @tf.function
     def boundary_residual(self, boundary, est_boundary):
@@ -111,59 +110,59 @@ class DeepOPINN(tf.keras.Model):
 
         # TODO: Log all three types of losses to see what has the biggest impact and for further study.
         # Physics informed loss
-        physicsLoss = self.get_f_residual(X=X)
+        physicsLoss, y_pred = self.get_f_residual(X=X)
         physicsLoss = tf.reduce_mean(tf.square(physicsLoss))
 
         # Model compiled loss
-        traditionalLoss = self.compute_loss(y=y, y_pred=self.last_y_pred)
+        traditionalLoss = self.compute_loss(y=y, y_pred=y_pred)
 
         # Boundary loss - IVP so grab the first value
         # NOTE: Double check to see if this is the correct slicing / way to do this
-        boundaryLoss = self.boundary_residual(boundary=y[0], est_boundary=self.last_y_pred[0])
+        boundaryLoss = self.boundary_residual(boundary=y[0], est_boundary=y_pred[0])
         boundaryLoss = tf.reduce_mean(tf.square(boundaryLoss))
 
         # Could I make this a weighted combination with some tunable variables?
         loss = traditionalLoss + physicsLoss + boundaryLoss
 
         # Write these out to the tensorboard callback
-        tf.summary.scaler('Physics Based Loss', data=physicsLoss, step=self.epoch)
-        tf.summary.scaler('Boundary Loss', data=boundaryLoss, step=self.epoch)
-        tf.summary.scaler('Conventional Loss', data=traditionalLoss, step=self.epoch)
-        tf.summary.scaler('Combined Loss', data=loss, step=self.epoch)
+        tf.summary.scalar('Physics Based Loss', data=physicsLoss, step=self._train_counter)
+        tf.summary.scalar('Boundary Loss', data=boundaryLoss, step=self._train_counter)
+        tf.summary.scalar('Conventional Loss', data=traditionalLoss, step=self._train_counter)
+        tf.summary.scalar('Combined Loss', data=loss, step=self._train_counter)
 
         # Write the fitting history to a dictionary
-        self.modelFits["Physics_Loss"].append(physicsLoss.numpy())
-        self.modelFits["Boundary_Loss"].append(boundaryLoss.numpy())
-        self.modelFits["Traditional_Loss"].append(traditionalLoss.numpy())
-        self.modelFits["Combined_Loss"].append(loss.numpy())
+        # self.modelFits["Physics_Loss"].append(physicsLoss.numpy())
+        # self.modelFits["Boundary_Loss"].append(boundaryLoss.numpy())
+        # self.modelFits["Traditional_Loss"].append(traditionalLoss.numpy())
+        # self.modelFits["Combined_Loss"].append(loss.numpy())
 
-        return loss 
+        return loss, y_pred 
 
     @tf.function
     def get_gradient(self, X, y):
         # Calculate the gradient for the model itself.
         with tf.GradientTape() as tape:
             tape.watch(self.trainable_variables)
-            loss = self.loss_function(X=X, y=y)
+            loss, y_pred = self.loss_function(X=X, y=y)
             grad = tape.gradient(loss, self.trainable_variables)
 
         del tape
-        return loss, grad
+        return loss, grad, y_pred
 
     @tf.function
     def train_step(self, data):
         # Unpack the data
         X, y = data
-        loss, grad_theta = self.get_gradient(X=X, y=y)
+        loss, grad_theta, y_pred = self.get_gradient(X=X, y=y)
         self.optimizer.apply_gradients(zip(grad_theta, self.trainable_variables))
         
         for metric in self.metrics:
             if metric.name == "loss":
                 metric.update_state(loss)
             else:
-                metric.update_state(y, self.last_y_pred)
+                metric.update_state(y, y_pred)
         
-        return {m.name() : m.result() for m in self.metrics}
+        return {m.name : m.result() for m in self.metrics}
 
 class DeepONET(tf.keras.Model):
     def __init__(self, branchNN, trunkNN, **kwargs):
