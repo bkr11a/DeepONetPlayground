@@ -3,6 +3,47 @@ __version__ = 0.1
 
 import tensorflow as tf
 
+from collections import defaultdict
+
+class LogPINNLossesCallback(tf.keras.callbacks.Callback):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def on_epoch_end(self, epoch, logs = None):
+        self.model.lossTracker.history()
+        self.model.lossTracker.reset()
+
+class LossTracker:
+    def __init__(self):
+        self.mean_total_loss = tf.keras.metrics.Mean()
+        self.mean_traditional_loss = tf.keras.metrics.Mean()
+        self.mean_IC_loss = tf.keras.metrics.Mean()
+        self.mean_physics_loss = tf.keras.metrics.Mean()
+        self.mean_learning_rate = tf.keras.metrics.Mean()
+        self.loss_history = defaultdict(list)
+
+    def update(self, total_loss, IC_loss, physicsLoss, traditionalLoss, learningRate):
+        self.mean_total_loss.update_state(total_loss)
+        self.mean_traditional_loss.update_state(traditionalLoss)
+        self.mean_IC_loss.update_state(IC_loss)
+        self.mean_physics_loss.update_state(physicsLoss)
+        self.mean_learning_rate.update_state(learningRate)
+
+    def reset(self):
+        self.mean_total_loss.reset_states()
+        self.mean_traditional_loss.reset_states()
+        self.mean_IC_loss.reset_states
+        self.mean_physics_loss.reset_states()
+        self.mean_learning_rate.reset_states()
+
+    def history(self):
+        self.loss_history['total_loss'].append(self.mean_total_loss.result().numpy())
+        self.loss_history['traditional_loss'].append(self.mean_traditional_loss.result().numpy())
+        self.loss_history['IC_loss'].append(self.mean_IC_loss.result().numpy())
+        self.loss_history['physics_loss'].append(self.mean_physics_loss.result().numpy())
+        self.loss_history['learning_rate'].append(self.mean_learning_rate.result().numpy())
+
+
 class BiasLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         self.bias = self.add_weight(initializer = tf.keras.initializers.Zeros, trainable = True)
@@ -47,7 +88,7 @@ class DeepOPINN(tf.keras.Model):
         self.branchNN = branchNN
         self.trunkNN = trunkNN
         self.biasLayer = BiasLayer()
-        self.modelFits = {"Physics_Loss" : [], "Boundary_Loss" : [], "Traditional_Loss" : [], "Combined_Loss" : []}
+        self.lossTracker = LossTracker()
 
     @tf.function
     def call(self, X):
@@ -128,30 +169,24 @@ class DeepOPINN(tf.keras.Model):
         tf.summary.scalar('Combined Loss', data=loss, step=self._train_counter)
         tf.summary.scalar('Optimizer Learning Rate', data=self.optimizer.lr, step=self._train_counter)
 
-        # Write the fitting history to a dictionary
-        # self.modelFits["Physics_Loss"].append(physicsLoss)
-        # self.modelFits["Boundary_Loss"].append(boundaryLoss)
-        # self.modelFits["Traditional_Loss"].append(traditionalLoss)
-        # self.modelFits["Combined_Loss"].append(loss)
-
-        return loss, y_pred 
+        return loss, traditionalLoss, boundaryLoss, physicsLoss, y_pred 
 
     @tf.function
     def get_gradient(self, X, y):
         # Calculate the gradient for the model itself.
         with tf.GradientTape() as tape:
             tape.watch(self.trainable_variables)
-            loss, y_pred = self.loss_function(X=X, y=y)
+            loss, traditionalLoss, boundaryLoss, physicsLoss, y_pred = self.loss_function(X=X, y=y)
             grad = tape.gradient(loss, self.trainable_variables)
 
         del tape
-        return loss, grad, y_pred
+        return loss, traditionalLoss, boundaryLoss, physicsLoss, grad, y_pred
 
     @tf.function
     def train_step(self, data):
         # Unpack the data
         X, y = data
-        loss, grad_theta, y_pred = self.get_gradient(X=X, y=y)
+        loss, traditionalLoss, boundaryLoss, physicsLoss, grad_theta, y_pred = self.get_gradient(X=X, y=y)
         self.optimizer.apply_gradients(zip(grad_theta, self.trainable_variables))
         
         for metric in self.metrics:
@@ -159,6 +194,8 @@ class DeepOPINN(tf.keras.Model):
                 metric.update_state(loss)
             else:
                 metric.update_state(y, y_pred)
+
+        self.lossTracker.update(loss, boundaryLoss, physicsLoss, traditionalLoss, self.optimizer.lr)
 
         return {m.name : m.result() for m in self.metrics}
 
