@@ -1,7 +1,6 @@
 __author__ = "Brad Rice"
 __version__ = 0.1
 
-import numpy as np
 import tensorflow as tf
 
 class BiasLayer(tf.keras.layers.Layer):
@@ -49,76 +48,74 @@ class DeepOPINN(tf.keras.Model):
         self.trunkNN = trunkNN
         self.biasLayer = BiasLayer()
         self.modelFits = {"Physics_Loss" : [], "Boundary_Loss" : [], "Traditional_Loss" : [], "Combined_Loss" : []}
-        # self.last_y_pred = None
 
     @tf.function
     def call(self, X):
         branch_input = X[0]
-        print(f"Branch Input Shape: {branch_input.shape}")
         trunk_input = X[1]
-        print(f"Trunk Input Shape: {trunk_input.shape}")
+
         branch = self.branchNN(branch_input)
-        print(f"Branch Output Shape: {branch.shape}")
         trunk = self.trunkNN(trunk_input)
-        print(f"Trunk Output Shape: {trunk.shape}")
         dot = tf.reduce_sum(tf.multiply(branch, trunk), axis = 1, keepdims = True)
-        print(f"Dot Product Output Shape: {dot.shape}")
         out = self.biasLayer(dot)
-        print(f"Output Shape: {out.shape}")
+
         return out
 
     # The below makes this a physics informed PINN
     @tf.function
-    def f_theta_residual(self, f_t, g):
-        return f_t - g
+    def f_theta_residual(self, f_t, gt):
+        return f_t - gt
 
     @tf.function
-    def get_f_residual(self, X):
-        domain = X[1]
+    def get_f_residual(self, X): 
+        # Grab the relevant information from the inputs.
         g = X[0]
+        gt = X[2]
+        t = X[1]
+
         # TODO - test if the persistent flag can be removed for performance
         with tf.GradientTape(persistent = True) as tape:
             # watch how things evole according to the domain
-            tape.watch(domain)
-            # NOTE: Not sure if this will work. I think it will because it will be using the call method
-            # However if this was a neural network object passed in the code should be
-            # f = self.nn([profile, domain])
-            # Perhaps we need to explicitly call the call function?
-            # f = self.call([profile, domain])
-            f = self(X)
+            tape.watch(t)
+            f = self([g, t])
 
             # Compute the gradient
-            f_t = tape.gradient(f, domain)
+            f_t = tape.gradient(f, t)
 
         # delete the tape
         del tape
 
+        ODE_residual = self.f_theta_residual(f_t=f_t, gt = gt)
         y_pred = f
 
-        return self.f_theta_residual(f_t=f_t, g=g), y_pred
+        return ODE_residual, y_pred
 
     @tf.function
-    def boundary_residual(self, boundary, est_boundary):
-        return boundary - est_boundary
+    def boundary_residual(self, X):
+        g = X[0]
+        
+        # Make a prediction for each of the boundary conditions
+        # In this case that is at t = 0.
+        y_pred_IC = self([g, tf.zeros((g.shape[0], 1))])
+
+        return y_pred_IC
 
     @tf.function
     def loss_function(self, X, y):
-        # Have to combine three things to form a unified loss function
+        # There are three components to this loss function;
         # 1. Traditional loss function that is explained by the supervised data. i.e. Mean Squared Error
         # 2. Physics Informed Loss, get the loss from the PDE
         # 3. Boundary value loss, get the loss from the boundary conditions (or equivalently initial value)
 
-        # TODO: Log all three types of losses to see what has the biggest impact and for further study.
-        # Physics informed loss
-        physicsLoss, y_pred = self.get_f_residual(X=X)
+        physicsLoss, y_pred = self.get_f_residual(X)
         physicsLoss = tf.reduce_mean(tf.square(physicsLoss))
 
         # Model compiled loss
+        # Perhaps this could be removed if we don't have data for y?
         traditionalLoss = self.compute_loss(y=y, y_pred=y_pred)
 
         # Boundary loss - IVP so grab the first value
-        # NOTE: Double check to see if this is the correct slicing / way to do this
-        boundaryLoss = self.boundary_residual(boundary=y[0], est_boundary=y_pred[0])
+        boundaryLoss = self.boundary_residual(X)
         boundaryLoss = tf.reduce_mean(tf.square(boundaryLoss))
 
         # Could I make this a weighted combination with some tunable variables?
@@ -129,12 +126,13 @@ class DeepOPINN(tf.keras.Model):
         tf.summary.scalar('Boundary Loss', data=boundaryLoss, step=self._train_counter)
         tf.summary.scalar('Conventional Loss', data=traditionalLoss, step=self._train_counter)
         tf.summary.scalar('Combined Loss', data=loss, step=self._train_counter)
+        tf.summary.scalar('Optimizer Learning Rate', data=self.optimizer.lr, step=self._train_counter)
 
         # Write the fitting history to a dictionary
-        # self.modelFits["Physics_Loss"].append(physicsLoss.numpy())
-        # self.modelFits["Boundary_Loss"].append(boundaryLoss.numpy())
-        # self.modelFits["Traditional_Loss"].append(traditionalLoss.numpy())
-        # self.modelFits["Combined_Loss"].append(loss.numpy())
+        # self.modelFits["Physics_Loss"].append(physicsLoss)
+        # self.modelFits["Boundary_Loss"].append(boundaryLoss)
+        # self.modelFits["Traditional_Loss"].append(traditionalLoss)
+        # self.modelFits["Combined_Loss"].append(loss)
 
         return loss, y_pred 
 
@@ -161,7 +159,7 @@ class DeepOPINN(tf.keras.Model):
                 metric.update_state(loss)
             else:
                 metric.update_state(y, y_pred)
-        
+
         return {m.name : m.result() for m in self.metrics}
 
 class DeepONET(tf.keras.Model):
@@ -174,15 +172,11 @@ class DeepONET(tf.keras.Model):
     @tf.function
     def call(self, X):
         branch_input = X[0]
-        print(f"Branch Input Shape: {branch_input.shape}")
         trunk_input = X[1]
-        print(f"Trunk Input Shape: {trunk_input.shape}")
+
         branch = self.branchNN(branch_input)
-        print(f"Branch Output Shape: {branch.shape}")
         trunk = self.trunkNN(trunk_input)
-        print(f"Trunk Output Shape: {trunk.shape}")
         dot = tf.reduce_sum(tf.multiply(branch, trunk), axis = 1, keepdims = True)
-        print(f"Dot Product Output Shape: {dot.shape}")
         out = self.biasLayer(dot)
-        print(f"Output Shape: {out.shape}")
+
         return out
