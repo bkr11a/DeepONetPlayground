@@ -1,7 +1,10 @@
 __author__ = "Brad Rice"
 __version__ = 0.1
 
+import io
+
 import tensorflow as tf
+import matplotlib.pyplot as plt
 
 from collections import defaultdict
 
@@ -12,6 +15,61 @@ class LogPINNLossesCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs = None):
         self.model.lossTracker.history()
         self.model.lossTracker.reset()
+
+class PredictOnEpochEndCallback(tf.keras.callbacks.Callback):
+    def __init__(self, examples, solutions, **kwargs):
+        super().__init__(**kwargs)
+        self.examples = examples
+        self.solutions = solutions
+
+    def convertPlotToImage(self, figure):
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png')
+        plt.close(figure)
+        buffer.seek(0)
+
+        image = tf.image.decode_png(buffer.getvalue(), channels = 4)
+        image = tf.expand_dims(image, 0)
+
+        return image
+
+    def plotResults(self, examples, solutions, predictions, epoch):
+        domain = tf.linspace(0, 1, 100)
+
+        fig, axs = plt.subplots(3, 1, figsize = (20, 15))
+        ds = ["train", "validation", "test"]
+
+        for i in range(3):
+            profile = examples[i][0][0]
+            ax = axs[i]
+            ax.plot(domain, profile, label = f"Profile")
+            ax.plot(domain, solutions[i], "-.", label = f"Ground Truth")
+            ax.plot(domain, predictions[i], "-.", label = f"Predictions")
+            ax.set_title(f"Sample prediction on {ds[i]} dataset")
+            ax.set_xlabel('$t$', fontsize = 12)
+            ax.set_ylabel('$u(t)$', fontsize = 12)
+            ax.grid(True, color = 'lightgrey')
+            ax.legend()
+
+        plt.suptitle(f"Prediction Results after epoch {epoch}")
+
+        return fig
+
+    def on_epoch_end(self, epoch, logs = None):
+        # Make 3 predictions plot them and log them at the end of each epoch
+        # 1. Predict from the training pool
+        # 2. Predict from the validation pool
+        # 3. Predict from the testing pool
+        predictions = []
+        for example in self.examples:
+            prediction = self.model.predict(example)
+            predictions.append(prediction)
+
+        # Plot the predictions and write the plot out to tensorboard
+        figure = self.plotResults(self.examples, self.solutions, predictions, epoch)
+        image = self.convertPlotToImage(figure)
+
+        tf.summary.image("Post Epoch Predictions", image, step = epoch)
 
 class LossTracker:
     def __init__(self):
