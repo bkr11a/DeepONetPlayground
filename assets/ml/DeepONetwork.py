@@ -62,7 +62,7 @@ class PredictOnEpochEndCallback(tf.keras.callbacks.Callback):
         # 3. Predict from the testing pool
         predictions = []
         for example in self.examples:
-            prediction = self.model.predict(example)
+            prediction = self.model.predict(example, verbose = 0)
             predictions.append(prediction)
 
         # Plot the predictions and write the plot out to tensorboard
